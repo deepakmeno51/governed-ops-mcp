@@ -1,10 +1,10 @@
-"""Governed Ops MCP server. Day 3-5: Tier 1 and Tier 2 tools behind the governance decorator."""
+"""Governed Ops MCP server: Tier 1, 2 and 3 tools behind the governance decorator."""
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import JSONResponse
 
 from governed.config import get_settings
-from tools import telemetry, tickets
+from tools import remediation, telemetry, tickets
 
 settings = get_settings()
 
@@ -27,6 +27,8 @@ mcp = FastMCP(
 for tool_fn in (
     telemetry.search_logs, telemetry.check_service_health, telemetry.run_readonly_sql,
     tickets.get_ticket, tickets.add_ticket_comment, tickets.draft_postmortem,
+    remediation.execute_sql_mutation, remediation.restart_service,
+    remediation.execute_approved_action, remediation.get_approval_status,
 ):
     mcp.tool()(tool_fn)
 

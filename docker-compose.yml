@@ -34,6 +34,8 @@ services:
       AGENT_RO_PASSWORD: ${AGENT_RO_PASSWORD:?set AGENT_RO_PASSWORD in .env}
       AGENT_RW_PASSWORD: ${AGENT_RW_PASSWORD:?set AGENT_RW_PASSWORD in .env}
       AUDIT_WRITER_PASSWORD: ${AUDIT_WRITER_PASSWORD:?set AUDIT_WRITER_PASSWORD in .env}
+      OPS_EXECUTOR_PASSWORD: ${OPS_EXECUTOR_PASSWORD:?set OPS_EXECUTOR_PASSWORD in .env}
+      APPROVAL_DECIDER_PASSWORD: ${APPROVAL_DECIDER_PASSWORD:?set APPROVAL_DECIDER_PASSWORD in .env}
 
   mcp-server:
     build: ./mcp_server
@@ -52,12 +54,43 @@ services:
       AGENT_RO_PASSWORD: ${AGENT_RO_PASSWORD}
       AGENT_RW_PASSWORD: ${AGENT_RW_PASSWORD}
       AUDIT_WRITER_PASSWORD: ${AUDIT_WRITER_PASSWORD}
+      OPS_EXECUTOR_PASSWORD: ${OPS_EXECUTOR_PASSWORD}
+      APPROVAL_TTL_MINUTES: ${APPROVAL_TTL_MINUTES:-10}
       MOCK_SERVICE_URL: http://mock-service:8000
+      UI_URL: http://approval-ui:8000
       # Dev-only tokens. Format: token:actor:role,... Override in .env.
-      MCP_API_TOKENS: ${MCP_API_TOKENS:-dev-operator-token:alice:operator,dev-viewer-token:bob:viewer}
+      MCP_API_TOKENS: ${MCP_API_TOKENS:-dev-operator-token:alice:operator,dev-viewer-token:bob:viewer,dev-operator2-token:dana:operator}
       MCP_TRANSPORT: streamable-http
     ports:
       - "127.0.0.1:8002:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  approval-ui:
+    build:
+      context: .
+      dockerfile: approval_ui/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: ${POSTGRES_DB}
+      APPROVAL_DECIDER_PASSWORD: ${APPROVAL_DECIDER_PASSWORD}
+      AUDIT_WRITER_PASSWORD: ${AUDIT_WRITER_PASSWORD}
+      # Dev-only approver logins. Format: name:password,... Override in .env.
+      # alice is also an operator, so she can test that self-approval is refused.
+      APPROVERS: ${APPROVERS:-carol:dev-approver-pass,alice:dev-alice-pass}
+    ports:
+      - "127.0.0.1:8003:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s

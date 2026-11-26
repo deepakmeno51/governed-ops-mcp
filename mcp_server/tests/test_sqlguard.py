@@ -52,3 +52,43 @@ def test_rejects_unsafe_sql(sql):
 def test_comments_are_not_executed():
     out = validate_select("SELECT 1 /* ; DROP TABLE orders */ FROM v_orders")
     assert "DROP" not in out.upper()
+
+
+from governed.sqlguard import plan_update  # noqa: E402
+
+UPDATE_OK = [
+    "UPDATE orders SET status = 'pending' WHERE status = 'processing'",
+    "UPDATE tickets SET status = 'resolved', severity = 'sev3' WHERE id = 3",
+    "UPDATE orders SET status = 'failed' WHERE id IN (SELECT id FROM orders WHERE status = 'processing')",
+]
+UPDATE_BAD = [
+    "UPDATE orders SET status = 'failed'",
+    "DROP TABLE orders",
+    "DELETE FROM orders WHERE id = 1",
+    "INSERT INTO orders DEFAULT VALUES",
+    "UPDATE users SET plan = 'free' WHERE id = 1",
+    "UPDATE orders SET total_cents = 0 WHERE id = 1",
+    "UPDATE orders SET id = 5 WHERE id = 1",
+    "UPDATE orders SET status = 'x' WHERE id IN (SELECT id FROM users)",
+    "UPDATE orders SET status = 'x' FROM users WHERE orders.user_id = users.id",
+    "UPDATE orders SET status = 'x' WHERE id = 1 RETURNING *",
+    "UPDATE orders SET status = 'x' WHERE id = 1; DROP TABLE orders",
+    "UPDATE orders SET status = pg_sleep(1)::text WHERE id = 1",
+    "UPDATE public.orders SET status = 'x' WHERE id = 1",
+    "WITH x AS (SELECT 1) UPDATE orders SET status = 'x' WHERE id = 1",
+    "",
+]
+
+
+@pytest.mark.parametrize("sql", UPDATE_OK)
+def test_plan_update_accepts_narrow_updates(sql):
+    plan = plan_update(sql)
+    assert plan.sql.upper().startswith("UPDATE")
+    assert plan.count_sql.upper().startswith("SELECT COUNT")
+
+
+@pytest.mark.parametrize("sql", UPDATE_BAD)
+def test_plan_update_rejects_everything_else(sql):
+    with pytest.raises(ToolError) as e:
+        plan_update(sql)
+    assert e.value.code == "SQL_REJECTED"

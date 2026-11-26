@@ -35,3 +35,6 @@ test:
 
 verify-audit:
 	docker compose exec mcp-server python -m scripts.verify_audit
+
+demo:
+	docker compose exec mcp-server python -m scripts.demo_outage

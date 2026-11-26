@@ -1,0 +1,6 @@
+fastapi==0.165.0
+uvicorn==0.54.0
+jinja2==3.1.6
+python-multipart==0.0.34
+psycopg[binary]==3.3.9
+httpx==0.28.1
