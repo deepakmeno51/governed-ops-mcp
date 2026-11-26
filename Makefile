@@ -26,3 +26,12 @@ counts:
 	SELECT 'users' t, count(*) FROM users UNION ALL SELECT 'orders', count(*) FROM orders \
 	UNION ALL SELECT 'app_logs', count(*) FROM app_logs UNION ALL SELECT 'tickets', count(*) FROM tickets \
 	UNION ALL SELECT 'stuck_orders', count(*) FROM orders WHERE status='processing';"
+
+smoke:
+	docker compose exec mcp-server python -m scripts.smoke_client
+
+test:
+	docker compose exec mcp-server python -m pytest -q -p no:cacheprovider
+
+verify-audit:
+	docker compose exec mcp-server python -m scripts.verify_audit

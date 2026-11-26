@@ -35,6 +35,36 @@ services:
       AGENT_RW_PASSWORD: ${AGENT_RW_PASSWORD:?set AGENT_RW_PASSWORD in .env}
       AUDIT_WRITER_PASSWORD: ${AUDIT_WRITER_PASSWORD:?set AUDIT_WRITER_PASSWORD in .env}
 
+  mcp-server:
+    build: ./mcp_server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      mock-service:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: ${POSTGRES_DB}
+      AGENT_RO_PASSWORD: ${AGENT_RO_PASSWORD}
+      AGENT_RW_PASSWORD: ${AGENT_RW_PASSWORD}
+      AUDIT_WRITER_PASSWORD: ${AUDIT_WRITER_PASSWORD}
+      MOCK_SERVICE_URL: http://mock-service:8000
+      # Dev-only tokens. Format: token:actor:role,... Override in .env.
+      MCP_API_TOKENS: ${MCP_API_TOKENS:-dev-operator-token:alice:operator,dev-viewer-token:bob:viewer}
+      MCP_TRANSPORT: streamable-http
+    ports:
+      - "127.0.0.1:8002:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
   mock-service:
     build: ./mock_service
     restart: unless-stopped
