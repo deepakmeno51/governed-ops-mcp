@@ -1,15 +1,6 @@
 import pytest
 
 from governed import audit
-from governed.db import connect
-
-
-def _db_available() -> bool:
-    try:
-        connect("audit_writer").close()
-        return True
-    except Exception:
-        return False
 
 
 def test_hash_is_deterministic_and_chained():
@@ -24,7 +15,7 @@ def test_jsonable_strips_nul_and_stringifies():
     assert out == {"x": "ab", "d": "1.5"}
 
 
-@pytest.mark.skipif(not _db_available(), reason="database not reachable")
+@pytest.mark.db
 def test_chain_verifies_after_writes():
     for i in range(3):
         audit.write_event(actor="pytest", event_type="TEST", tool_name="t", risk_tier=1,
@@ -32,7 +23,7 @@ def test_chain_verifies_after_writes():
     assert audit.verify_chain()["ok"]
 
 
-@pytest.mark.skipif(not _db_available(), reason="database not reachable")
+@pytest.mark.db
 def test_concurrent_writers_do_not_fork_the_chain():
     from concurrent.futures import ThreadPoolExecutor
 

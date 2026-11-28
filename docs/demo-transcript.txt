@@ -1,0 +1,29 @@
+
+[1 triage] Checking service health
+    {'api-gateway': 'healthy', 'orders-service': 'healthy', 'payments-service': 'degraded', 'auth-service': 'healthy'}
+
+[2 triage] Searching payments-service errors (last 7 days)
+    {'ERROR': 1842} | e.g. upstream timeout after 30000ms
+
+[3 triage] Counting stuck orders
+    [{'stuck': 250}]
+
+[4 fix] Requesting the fix. This does NOT run it.
+    approval_id : 56deb94f-9d25-4ca2-8a22-71576a849bd3
+    will change : 250 rows in orders
+    request hash: 8aa8e19edf3617fb03b3352b5bf2c138ab204f97996f2bed50e92940677be452
+    expires     : 2026-11-28T09:37:57.452151+05:30
+
+    >>> Open http://localhost:8003 (carol / dev-approver-pass), review the SQL and click Approve <<<
+
+[5 wait] Polling for the human decision (up to 10 minutes, backing off from 2s to 10s)
+    status: APPROVED
+
+[6 execute] Executing the approved request
+    rows changed: 250
+    undo hint   : To undo, run these as a new approved request (or by a DBA): UPDATE orders SET status = 'processing' WHERE id IN (12001, 12002, 12003, 12004,...
+
+[7 verify] Counting stuck orders again
+    [{'stuck': 0}]
+
+Done. Check the audit trail:  python -m scripts.verify_audit

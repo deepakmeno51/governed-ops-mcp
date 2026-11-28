@@ -1,6 +1,5 @@
-"""State machine tests against real Postgres. Tests that need the approval_decider or admin
-passwords run only when those are set in the environment (the server container has neither, on purpose)."""
-import os
+"""State machine tests against real Postgres. They run only against the isolated test database
+(see conftest.py): docker compose --profile test run --rm tests"""
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -14,18 +13,7 @@ from governed.errors import ToolError
 from governed.identity import Identity
 from governed.policy import EXECUTORS
 
-
-def _available(role) -> bool:
-    try:
-        connect(role).close()
-        return True
-    except Exception:
-        return False
-
-
-needs_db = pytest.mark.skipif(not _available("ops_executor"), reason="ops_executor not reachable")
-needs_decider = pytest.mark.skipif(not (_available("ops_executor") and _available("approval_decider")),
-                                   reason="approval_decider credentials not set")
+needs_db = needs_decider = pytest.mark.db
 REQ = "pytest-requester"
 
 
@@ -163,18 +151,14 @@ def test_failed_execution_is_recorded_and_not_retried():
     assert e2.value.code == "EXECUTION_FAILED"
 
 
-@pytest.mark.skipif(not (_available("ops_executor") and _available("approval_decider") and os.environ.get("POSTGRES_PASSWORD")),
-                    reason="needs approval_decider and admin credentials")
-def test_tampered_args_are_refused_at_execution():
+@pytest.mark.db
+def test_tampered_args_are_refused_at_execution(admin):
     EXECUTORS["t_test"] = lambda args, row, cur: {"ran": True}
     row = new_request()
     _decide(row, "approver-1")
-    with psycopg.connect(host=os.environ.get("DB_HOST", "postgres"), port=os.environ.get("DB_PORT", "5432"),
-                         dbname=os.environ.get("DB_NAME", "ops"), user=os.environ["POSTGRES_USER"],
-                         password=os.environ["POSTGRES_PASSWORD"], autocommit=True) as admin:
-        admin.execute("ALTER TABLE approvals DISABLE TRIGGER approvals_guard_trg")
-        admin.execute("UPDATE approvals SET args = '{\"n\": \"evil\"}'::jsonb WHERE id = %s", (row["id"],))
-        admin.execute("ALTER TABLE approvals ENABLE TRIGGER approvals_guard_trg")
+    admin.execute("ALTER TABLE approvals DISABLE TRIGGER approvals_guard_trg")
+    admin.execute("UPDATE approvals SET args = '{\"n\": \"evil\"}'::jsonb WHERE id = %s", (row["id"],))
+    admin.execute("ALTER TABLE approvals ENABLE TRIGGER approvals_guard_trg")
     with pytest.raises(ToolError) as e:
         approvals.execute(str(row["id"]), Identity(REQ, "operator"))
     assert e.value.code == "HASH_MISMATCH"

@@ -3,6 +3,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import JSONResponse
 
+from governed import maintenance
 from governed.config import get_settings
 from tools import remediation, telemetry, tickets
 
@@ -35,8 +36,9 @@ for tool_fn in (
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request):
-    return JSONResponse({"status": "ok"})
+    return JSONResponse({"status": "ok", "maintenance": maintenance.STATE})
 
 
 if __name__ == "__main__":
+    maintenance.start_background()      # expire stale approvals and close abandoned executions on a timer
     mcp.run(transport=settings.transport)

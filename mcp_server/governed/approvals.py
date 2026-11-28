@@ -17,7 +17,7 @@ from .audit import canonical, jsonable
 from .config import get_settings
 from .db import connect
 from .errors import ToolError, from_exception
-from .policy import EXECUTORS
+from .policy import ATOMIC_EXECUTORS, EXECUTORS
 
 LIVE = ("PENDING", "APPROVED", "EXECUTING")
 
@@ -83,6 +83,43 @@ def expire_stale(role: str = "ops_executor") -> list[str]:
         except Exception:  # noqa: BLE001
             pass
     return ids
+
+
+def _abandoned_result(tool: str, stale_seconds: float) -> dict:
+    if tool in ATOMIC_EXECUTORS:
+        err = {"code": "EXECUTION_ABANDONED", "outcome": "NOT_APPLIED",
+               "message": "The server stopped while running this action. The change runs in one database transaction "
+                          "that never committed, so nothing was changed.",
+               "hint": "Request a new approval if the change is still needed."}
+    else:
+        err = {"code": "EXECUTION_ABANDONED", "outcome": "UNKNOWN",
+               "message": f"The server stopped while running this action (no result after {int(stale_seconds)}s). "
+                          "The action may or may not have happened.",
+               "hint": "Check the system state before requesting this again."}
+    return {"error": err}
+
+
+def recover_stuck_executions(stale_seconds: float | None = None, role: str = "ops_executor") -> list[str]:
+    """Close executions that have been EXECUTING for too long (the executor crashed or lost its connection).
+    The database allows only ops_executor to do this. Rows that a live executor holds locked are skipped."""
+    stale = stale_seconds if stale_seconds is not None else get_settings().execution_stale_seconds
+    done: list[tuple[str, str, str]] = []
+    with connect(role) as conn, conn.cursor() as cur:
+        cur.execute("SELECT id, tool_name FROM approvals WHERE status = 'EXECUTING' "
+                    "AND COALESCE(started_at, created_at) < now() - make_interval(secs => %s) "
+                    "FOR UPDATE SKIP LOCKED", (stale,))
+        for r in cur.fetchall():
+            result = _abandoned_result(r["tool_name"], stale)
+            cur.execute("UPDATE approvals SET status = 'FAILED', executed_at = now(), result = %s "
+                        "WHERE id = %s AND status = 'EXECUTING'", (Jsonb(jsonable(result)), r["id"]))
+            done.append((str(r["id"]), r["tool_name"], result["error"]["outcome"]))
+    for approval_id, tool, outcome in done:
+        try:
+            audit.write_event(actor="system", event_type="APPROVAL_EXECUTION_ABANDONED", tool_name=tool,
+                              approval_id=approval_id, outcome="FAILED:EXECUTION_ABANDONED", output={"outcome": outcome})
+        except Exception:  # noqa: BLE001
+            pass
+    return [d[0] for d in done]
 
 
 # ---- request ----------------------------------------------------------------
@@ -166,7 +203,7 @@ def execute(approval_id: str, caller) -> dict:
 
     # Claim. Only one caller can move APPROVED -> EXECUTING, so a double call cannot run twice.
     with connect("ops_executor") as conn, conn.cursor() as cur:
-        cur.execute("UPDATE approvals SET status = 'EXECUTING' WHERE id = %s AND status = 'APPROVED' "
+        cur.execute("UPDATE approvals SET status = 'EXECUTING', started_at = now() WHERE id = %s AND status = 'APPROVED' "
                     "AND expires_at > now() RETURNING id", (row["id"],))
         claimed = cur.fetchone()
     if not claimed:
@@ -177,9 +214,18 @@ def execute(approval_id: str, caller) -> dict:
 
     try:
         with connect("ops_executor") as conn, conn.cursor() as cur:
+            # Hold the row for the whole execution so the recovery job cannot close it while we run,
+            # and confirm the claim is still ours.
+            cur.execute("SELECT id FROM approvals WHERE id = %s AND status = 'EXECUTING' FOR UPDATE", (row["id"],))
+            if cur.fetchone() is None:
+                raise ToolError("EXECUTION_LOST_CLAIM", "This execution was closed by recovery before it could run.",
+                                "Nothing was run. Request a new approval if still needed.")
             result = jsonable(fn(row["args"], row, cur))
             cur.execute("UPDATE approvals SET status = 'EXECUTED', executed_at = now(), result = %s "
                         "WHERE id = %s AND status = 'EXECUTING'", (Jsonb(result), row["id"]))
+            if cur.rowcount != 1:   # never leave a committed change behind a FAILED approval
+                raise ToolError("EXECUTION_LOST_CLAIM", "The approval changed state during execution. Rolled back.",
+                                "Nothing was changed. Request a new approval if still needed.")
     except Exception as exc:  # noqa: BLE001
         err = from_exception(exc)["error"]
         with connect("ops_executor") as conn, conn.cursor() as cur:
@@ -187,7 +233,10 @@ def execute(approval_id: str, caller) -> dict:
                         "WHERE id = %s AND status = 'EXECUTING'", (Jsonb(jsonable({"error": err})), row["id"]))
         audit.write_event(actor=caller.actor, event_type="APPROVAL_EXECUTION_FAILED", tool_name=row["tool_name"],
                           approval_id=row["id"], outcome="FAILED:" + err["code"], output={"error": err})
-        raise ToolError("EXECUTION_FAILED", err["message"], err.get("hint", ""), bool(err.get("retryable")))
+        # The approval is spent, so retrying execute_approved_action cannot help. The agent must ask again.
+        raise ToolError("EXECUTION_FAILED", err["message"],
+                        (err.get("hint") or "") + " This approval is used up: request a new one if the action is still needed.",
+                        False)
 
     audit.write_event(actor=caller.actor, event_type="APPROVAL_EXECUTED", tool_name=row["tool_name"],
                       approval_id=row["id"], outcome="EXECUTED", output=_trim(result))

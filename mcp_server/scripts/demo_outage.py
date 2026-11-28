@@ -1,13 +1,16 @@
 """Plays the incident from the demo: an agent triages the outage, asks to fix it, and waits for a human.
 Run:  python -m scripts.demo_outage      Then open http://localhost:8003 and approve the request.
+CI:   python -m scripts.demo_outage --auto-approve   approves through the same approval UI, as the dev approver.
 Works once per fresh database (the fix changes the stuck orders). Reset with: docker compose down -v
 """
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 
+import httpx
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
@@ -15,6 +18,9 @@ from governed.config import get_settings
 
 URL = os.environ.get("MCP_URL", "http://localhost:8000/mcp")
 TOKEN = next(t for t, (_, role) in get_settings().api_tokens.items() if role == "operator")
+UI_URL = os.environ.get("UI_URL", "http://localhost:8003")
+AUTO_APPROVE = "--auto-approve" in sys.argv
+APPROVER = ("carol", "dev-approver-pass")
 FIX_SQL = "UPDATE orders SET status = 'pending' WHERE status = 'processing' AND updated_at < now() - interval '15 minutes'"
 
 
@@ -24,6 +30,21 @@ async def call(tool, args=None):
             await session.initialize()
             res = await session.call_tool(tool, args or {})
             return res.structuredContent or json.loads("".join(c.text for c in res.content))
+
+
+def approve_through_ui(approval_id: str, expected_hash: str) -> None:
+    """What a human does in the browser, done over HTTP: open the request, check the hash, click Approve."""
+    with httpx.Client(auth=APPROVER, follow_redirects=True, timeout=10) as c:
+        page = c.get(f"{UI_URL}/approvals/{approval_id}").text
+        shown = re.search(r'name="args_hash" value="([0-9a-f]{64})"', page)
+        csrf = re.search(r'name="csrf" value="([0-9a-f]+)"', page)
+        if not (shown and csrf):
+            sys.exit("    auto-approve: could not read the approval page")
+        if shown.group(1) != expected_hash:
+            sys.exit("    auto-approve: the hash on the page differs from the request hash. Not approving.")
+        print(f"    [auto-approve] {APPROVER[0]} checked the hash on the page matches, clicking Approve")
+        c.post(f"{UI_URL}/approvals/{approval_id}/decide",
+               data={"decision": "approve", "args_hash": shown.group(1), "csrf": csrf.group(1)})
 
 
 def say(step, text):
@@ -47,23 +68,30 @@ async def main():
     r = await call("execute_sql_mutation", {"sql": FIX_SQL, "idempotency_key": "demo-fix-orders-1",
                                             "reasoning": "orders stuck in processing since the payments pool exhausted; reset to pending so they retry"})
     if not r.get("ok"):
+        if r["error"]["code"] == "NO_ROWS_MATCHED":
+            print("    No stuck orders match. This database was already fixed. Reset with: docker compose down -v")
+            sys.exit(0)
         print("   ", r["error"]); sys.exit(1)
     req = r["result"]
     print(f"    approval_id : {req['approval_id']}")
     print(f"    will change : {req['preview']['rows_matched']} rows in {req['preview']['table']}")
     print(f"    request hash: {req['args_hash']}")
     print(f"    expires     : {req['expires_at']}")
-    print(f"\n    >>> Open http://localhost:8003 (carol / dev-approver-pass), review the SQL and click Approve <<<")
+    if AUTO_APPROVE:
+        approve_through_ui(req["approval_id"], req["args_hash"])
+    else:
+        print(f"\n    >>> Open http://localhost:8003 (carol / dev-approver-pass), review the SQL and click Approve <<<")
 
-    say("5 wait", "Polling for the human decision (up to 10 minutes)")
+    say("5 wait", "Polling for the human decision (up to 10 minutes, backing off from 2s to 10s)")
     deadline = time.time() + 600
-    status = "PENDING"
+    status, delay = "PENDING", 2.0
     while time.time() < deadline:
         st = await call("get_approval_status", {"approval_id": req["approval_id"]})
         status = st["result"]["status"]
         if status != "PENDING":
             break
-        await asyncio.sleep(3)
+        await asyncio.sleep(delay)
+        delay = min(delay * 1.5, 10.0)      # every poll is audited, so do not poll tightly
     print(f"    status: {status}")
     if status != "APPROVED":
         print("    Not approved, so the agent stops here."); sys.exit(0)
@@ -82,4 +110,5 @@ async def main():
     print("\nDone. Check the audit trail:  python -m scripts.verify_audit")
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

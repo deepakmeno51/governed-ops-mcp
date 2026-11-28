@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    name: Tests (throwaway Postgres)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create .env
+        run: cp .env.example .env
+      - name: Run tests
+        run: docker compose --profile test run --rm --build tests
+
+  stack:
+    name: Full stack (smoke, evals, demo, audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create .env
+        run: |
+          cp .env.example .env
+          # letters and digits only, as the project requires
+          sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci$(openssl rand -hex 8)/" .env
+          sed -i "s/^AGENT_RO_PASSWORD=.*/AGENT_RO_PASSWORD=ci$(openssl rand -hex 8)/" .env
+          sed -i "s/^AGENT_RW_PASSWORD=.*/AGENT_RW_PASSWORD=ci$(openssl rand -hex 8)/" .env
+          sed -i "s/^AUDIT_WRITER_PASSWORD=.*/AUDIT_WRITER_PASSWORD=ci$(openssl rand -hex 8)/" .env
+          sed -i "s/^OPS_EXECUTOR_PASSWORD=.*/OPS_EXECUTOR_PASSWORD=ci$(openssl rand -hex 8)/" .env
+          sed -i "s/^APPROVAL_DECIDER_PASSWORD=.*/APPROVAL_DECIDER_PASSWORD=ci$(openssl rand -hex 8)/" .env
+      - name: Start the stack
+        run: |
+          docker compose up -d --build
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:8002/health >/dev/null 2>&1 && curl -fsS http://127.0.0.1:8003/health >/dev/null 2>&1; then
+              echo "stack is up"; exit 0
+            fi
+            sleep 3
+          done
+          docker compose ps
+          docker compose logs --no-color --tail 100
+          exit 1
+      - name: Smoke test (55 checks)
+        run: docker compose exec -T mcp-server python -m scripts.smoke_client
+      - name: Adversarial evals (24 scenarios)
+        run: docker compose exec -T mcp-server python -m evals.run
+      - name: Incident demo, approved through the real UI
+        run: docker compose exec -T mcp-server python -m scripts.demo_outage --auto-approve
+      - name: Verify the audit chain
+        run: docker compose exec -T mcp-server python -m scripts.verify_audit
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail 200
+      - name: Stop
+        if: always()
+        run: docker compose down -v

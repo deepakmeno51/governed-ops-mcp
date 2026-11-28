@@ -7,7 +7,9 @@ _RULES = [
     (re.compile(r"(password|passwd|pwd|secret|token|api[_-]?key)\s*[=:]\s*\S+", re.I), r"\1=[REDACTED]"),
     (re.compile(r"\b(sk|pk|rk)_(live|test)_\w+"), "[REDACTED_KEY]"),
     (re.compile(r"Bearer\s+[A-Za-z0-9._\-]+", re.I), "Bearer [REDACTED]"),
-    (re.compile(r"[A-Za-z0-9._+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"), "[REDACTED_EMAIL]"),
+    # The lookbehind makes a match start only at the beginning of a word. Without it, a long run of ordinary
+    # characters made this pattern quadratic: 100,000 characters took about 9 seconds.
+    (re.compile(r"(?<![A-Za-z0-9._+\-])[A-Za-z0-9._+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"), "[REDACTED_EMAIL]"),
 ]
 
 SENSITIVE_KEYS = {"password", "password_hash", "passwd", "secret", "token", "api_key", "apikey", "authorization", "phone"}

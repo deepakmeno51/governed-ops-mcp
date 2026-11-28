@@ -5,6 +5,7 @@ from governed.config import get_settings
 from governed.db import connect
 from governed.decorator import governed_tool
 from governed.errors import ToolError
+from governed.limits import clip_rows
 from governed.policy import Tier
 from governed.sqlguard import validate_select
 
@@ -59,6 +60,7 @@ def search_logs(service: str | None = None, level: str | None = None, contains: 
             params + [limit],
         )
         rows = [{**r, "ts": r["ts"].isoformat()} for r in cur.fetchall()]
+    rows, _, _ = clip_rows(rows)           # a very long log message cannot blow up the response
     return {"matched_by_level": by_level, "returned": len(rows), "rows": rows}
 
 
@@ -91,5 +93,9 @@ def run_readonly_sql(sql: str, reasoning: str = "") -> dict:
         cur.execute(safe_sql)
         rows = cur.fetchmany(cap + 1)
         columns = [d.name for d in cur.description]
-    return {"columns": columns, "rows": rows[:cap], "row_count": min(len(rows), cap),
-            "truncated": len(rows) > cap, "executed_sql": safe_sql}
+    kept, cut_short, clipped = clip_rows(rows[:cap])
+    result = {"columns": columns, "rows": kept, "row_count": len(kept),
+              "truncated": len(rows) > cap or cut_short, "executed_sql": safe_sql}
+    if clipped:
+        result["cells_clipped"] = clipped          # text longer than MAX_CELL_CHARS was cut
+    return result

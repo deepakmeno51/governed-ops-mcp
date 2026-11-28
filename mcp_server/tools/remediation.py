@@ -77,7 +77,7 @@ def exec_sql_mutation(args: dict, row: dict, cur) -> dict:
     }
 
 
-@governed_tool(Tier.DESTRUCTIVE, prepare=prepare_sql_mutation, execute=exec_sql_mutation)
+@governed_tool(Tier.DESTRUCTIVE, prepare=prepare_sql_mutation, execute=exec_sql_mutation, atomic=True)
 def execute_sql_mutation(sql: str, idempotency_key: str = "", reasoning: str = "") -> dict:
     """Request a database change (Tier 3, destructive). This does NOT run the change.
     It creates an approval request that a human must approve in the approval UI.

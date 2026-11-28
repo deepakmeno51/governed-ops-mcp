@@ -42,6 +42,9 @@ class Settings:
     host: str = "0.0.0.0"
     port: int = 8000
     row_cap: int = 200
+    tool_timeout_seconds: float = 30.0          # wall-clock limit for Tier 1 and 2 tool bodies
+    execution_stale_seconds: float = 120.0      # EXECUTING longer than this means the executor died
+    maintenance_interval_seconds: float = 30.0  # how often the expiry and recovery job runs
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -65,6 +68,9 @@ class Settings:
             host=e.get("MCP_HOST", "0.0.0.0"),
             port=int(e.get("MCP_PORT", "8000")),
             row_cap=int(e.get("ROW_CAP", "200")),
+            tool_timeout_seconds=float(e.get("TOOL_TIMEOUT_SECONDS", "30")),
+            execution_stale_seconds=float(e.get("EXECUTION_STALE_SECONDS", "120")),
+            maintenance_interval_seconds=float(e.get("MAINTENANCE_INTERVAL_SECONDS", "30")),
         )
 
 

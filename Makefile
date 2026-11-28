@@ -30,7 +30,11 @@ counts:
 smoke:
 	docker compose exec mcp-server python -m scripts.smoke_client
 
-test:
+test:                ## all tests, against a throwaway Postgres (never touches the real database)
+	docker compose --profile test run --rm --build tests
+	docker compose --profile test rm -sfv postgres-test migrate-test
+
+test-unit:           ## fast tests that need no database, inside the running server container
 	docker compose exec mcp-server python -m pytest -q -p no:cacheprovider
 
 verify-audit:
@@ -38,3 +42,13 @@ verify-audit:
 
 demo:
 	docker compose exec mcp-server python -m scripts.demo_outage
+
+demo-auto:           ## the incident demo with no human: approves through the real UI as carol
+	docker compose exec mcp-server python -m scripts.demo_outage --auto-approve
+
+demo-reset:          ## fresh database (250 stuck orders again), then rebuild
+	docker compose down -v
+	docker compose up -d --build
+
+evals:               ## 24 adversarial scenarios against the running stack
+	docker compose exec mcp-server python -m evals.run
